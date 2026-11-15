@@ -1,0 +1,28 @@
+package com.savexa.dialer
+
+import android.telecom.Call
+import android.telecom.InCallService
+import android.util.Log
+
+class SavexaInCallService : InCallService() {
+
+    override fun onCallAdded(call: Call) {
+        super.onCallAdded(call)
+
+        Log.d(
+            "SavexaDialer",
+            "Call added: ${call.details.handle}"
+        )
+
+        // Next phase:
+        // Observe call state.
+        // Display incoming call UI.
+        // Display ongoing call UI.
+    }
+
+    override fun onCallRemoved(call: Call) {
+        super.onCallRemoved(call)
+
+        Log.d("SavexaDialer", "Call removed")
+    }
+}
