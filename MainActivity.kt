@@ -1,11 +1,15 @@
 package com.savexa.dialer
 
 import android.app.role.RoleManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,7 +18,6 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -31,45 +34,129 @@ class MainActivity : ComponentActivity() {
     private val roleLauncher =
         registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
-        ) { }
+        ) { result ->
+            Log.d("SavexaDialer", "Dialer role result: ${result.resultCode}")
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        setContent {
-            SavexaTheme {
-                SavexaApp(
-                    onDefaultDialer = {
-                        requestDialerRole()
-                    },
-                    onCall = { number ->
-                        val intent = Intent(
-                            Intent.ACTION_DIAL,
-                            Uri.fromParts("tel", number, null)
+        installCrashLogger()
+
+        try {
+            setContent {
+                SavexaTheme {
+                    SavexaApp(
+                        onDefaultDialer = {
+                            requestDialerRole()
+                        },
+                        onCall = { number ->
+                            makeCallIntent(number)
+                        }
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("SavexaDialer", "Startup error", e)
+            throw e
+        }
+    }
+
+    private fun installCrashLogger() {
+        val previousHandler =
+            Thread.getDefaultUncaughtExceptionHandler()
+
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+
+            Log.e("SavexaDialerCrash", "Application crashed", error)
+
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
+                    val values = ContentValues().apply {
+                        put(
+                            MediaStore.MediaColumns.DISPLAY_NAME,
+                            "SavexaDialer-Crash-${System.currentTimeMillis()}.txt"
                         )
-                        startActivity(intent)
+                        put(
+                            MediaStore.MediaColumns.MIME_TYPE,
+                            "text/plain"
+                        )
+                        put(
+                            MediaStore.MediaColumns.RELATIVE_PATH,
+                            Environment.DIRECTORY_DOWNLOADS +
+                                "/SavexaDialer"
+                        )
                     }
+
+                    val uri = contentResolver.insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        values
+                    )
+
+                    uri?.let {
+                        contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer ->
+                            writer.write(
+                                Log.getStackTraceString(error)
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SavexaDialerCrash", "Log saving failed", e)
+            }
+
+            if (previousHandler != null) {
+                previousHandler.uncaughtException(thread, error)
+            } else {
+                android.os.Process.killProcess(
+                    android.os.Process.myPid()
                 )
+                kotlin.system.exitProcess(10)
             }
         }
     }
 
     private fun requestDialerRole() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
 
-            val manager =
-                getSystemService(Context.ROLE_SERVICE)
-                    as RoleManager
+                val manager =
+                    getSystemService(Context.ROLE_SERVICE) as? RoleManager
+                        ?: return
 
-            if (manager.isRoleAvailable(RoleManager.ROLE_DIALER) &&
-                !manager.isRoleHeld(RoleManager.ROLE_DIALER)
-            ) {
-                roleLauncher.launch(
-                    manager.createRequestRoleIntent(
-                        RoleManager.ROLE_DIALER
+                if (
+                    manager.isRoleAvailable(RoleManager.ROLE_DIALER) &&
+                    !manager.isRoleHeld(RoleManager.ROLE_DIALER)
+                ) {
+                    roleLauncher.launch(
+                        manager.createRequestRoleIntent(
+                            RoleManager.ROLE_DIALER
+                        )
                     )
+                }
+            } else {
+                Log.w(
+                    "SavexaDialer",
+                    "Dialer role request requires Android 10 or newer"
                 )
             }
+        } catch (e: Exception) {
+            Log.e("SavexaDialer", "Dialer role request failed", e)
+        }
+    }
+
+    private fun makeCallIntent(number: String) {
+        if (number.isBlank()) return
+
+        try {
+            val intent = Intent(
+                Intent.ACTION_DIAL,
+                Uri.fromParts("tel", number, null)
+            )
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("SavexaDialer", "Unable to open dialer", e)
         }
     }
 }
@@ -79,7 +166,6 @@ private val SavexaBackground = Color(0xFFF5F6FA)
 
 @Composable
 fun SavexaTheme(content: @Composable () -> Unit) {
-
     MaterialTheme(
         colorScheme = lightColorScheme(
             primary = SavexaBlue,
@@ -103,7 +189,6 @@ fun SavexaApp(
     onDefaultDialer: () -> Unit,
     onCall: (String) -> Unit
 ) {
-
     var selectedTab by remember {
         mutableStateOf(DialerTab.KEYPAD)
     }
@@ -114,13 +199,10 @@ fun SavexaApp(
 
     Scaffold(
         containerColor = SavexaBackground,
-
         bottomBar = {
-
             NavigationBar(
                 containerColor = Color.White
             ) {
-
                 val tabs = listOf(
                     DialerTab.RECENTS,
                     DialerTab.CONTACTS,
@@ -131,17 +213,10 @@ fun SavexaApp(
                 tabs.forEach { tab ->
 
                     val icon = when (tab) {
-                        DialerTab.RECENTS ->
-                            Icons.Default.History
-
-                        DialerTab.CONTACTS ->
-                            Icons.Default.Contacts
-
-                        DialerTab.KEYPAD ->
-                            Icons.Default.Dialpad
-
-                        DialerTab.SETTINGS ->
-                            Icons.Default.Settings
+                        DialerTab.RECENTS -> Icons.Default.History
+                        DialerTab.CONTACTS -> Icons.Default.Contacts
+                        DialerTab.KEYPAD -> Icons.Default.Dialpad
+                        DialerTab.SETTINGS -> Icons.Default.Settings
                     }
 
                     NavigationBarItem(
@@ -150,12 +225,17 @@ fun SavexaApp(
                             selectedTab = tab
                         },
                         icon = {
-                            Icon(icon, contentDescription = null)
+                            Icon(
+                                icon,
+                                contentDescription = tab.name
+                            )
                         },
                         label = {
-                            Text(tab.name.lowercase().replaceFirstChar {
-                                it.uppercase()
-                            })
+                            Text(
+                                tab.name.lowercase().replaceFirstChar {
+                                    it.uppercase()
+                                }
+                            )
                         }
                     )
                 }
@@ -167,7 +247,10 @@ fun SavexaApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .padding(
+                    horizontal = 20.dp,
+                    vertical = 16.dp
+                )
         ) {
 
             Text(
@@ -189,15 +272,13 @@ fun SavexaApp(
                     (
                         slideInHorizontally(
                             spring(
-                                stiffness =
-                                    Spring.StiffnessMediumLow
+                                stiffness = Spring.StiffnessMediumLow
                             )
                         ) { it / 5 } + fadeIn()
                     ) togetherWith (
                         slideOutHorizontally(
                             spring(
-                                stiffness =
-                                    Spring.StiffnessMediumLow
+                                stiffness = Spring.StiffnessMediumLow
                             )
                         ) { -it / 6 } + fadeOut()
                     )
@@ -208,7 +289,6 @@ fun SavexaApp(
                 when (tab) {
 
                     DialerTab.KEYPAD -> {
-
                         SavexaKeypad(
                             number = phoneNumber,
                             onNumberChange = {
@@ -239,7 +319,9 @@ fun SavexaApp(
                     DialerTab.SETTINGS -> {
                         Column {
                             Text("Default phone app")
+
                             Spacer(Modifier.height(12.dp))
+
                             Button(
                                 onClick = onDefaultDialer
                             ) {
@@ -259,7 +341,6 @@ fun SavexaKeypad(
     onNumberChange: (String) -> Unit,
     onCall: () -> Unit
 ) {
-
     val keys = listOf(
         listOf("1" to "", "2" to "ABC", "3" to "DEF"),
         listOf("4" to "GHI", "5" to "JKL", "6" to "MNO"),
@@ -288,10 +369,8 @@ fun SavexaKeypad(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement =
-                    Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-
                 row.forEach { (digit, letters) ->
 
                     KeyButton(
@@ -356,24 +435,15 @@ fun KeyButton(
     letters: String,
     onClick: () -> Unit
 ) {
-
-    val scale = remember {
-        Animatable(1f)
-    }
-
     Surface(
         modifier = Modifier
             .padding(vertical = 5.dp)
             .size(78.dp)
             .clip(CircleShape)
-            .clickable {
-
-                onClick()
-            },
+            .clickable(onClick = onClick),
         color = Color.White,
         shape = CircleShape
     ) {
-
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -402,11 +472,9 @@ fun EmptyScreen(
     title: String,
     subtitle: String
 ) {
-
     Column(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-
         Text(
             title,
             fontSize = 25.sp,
